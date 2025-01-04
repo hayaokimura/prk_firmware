@@ -1,50 +1,120 @@
 require "fileutils"
 
-ENV['MRUBY_CONFIG'] = "prk_firmware-cortex-m0plus"
-PICO_SDK_TAG = "1.5.1"
+PICO_SDK_TAG = "2.1.0"
 
-task :default => :production
+def mruby_config
+  case ENV['BOARD']&.downcase
+  when 'pico2'
+    'prk_firmware-cortex-m33'
+  else
+    'prk_firmware-cortex-m0plus'
+  end
+end
+
+def cmake_flags
+  flags = []
+  case ENV['BOARD']&.downcase
+  when 'pico2'
+    flags << "PICO2=yes"
+  end
+  flags.join(" ")
+end
+
+def def_board
+  case ENV['BOARD']&.downcase
+  when 'pico2'
+    '-DPICO_PLATFORM=rp2350 -DPICO_BOARD=pico2'
+  else
+    '-DPICO_PLATFORM=rp2040 -DPICO_BOARD=pico'
+  end
+end
+
+def build_dir
+  dir = case ENV['BOARD']&.downcase
+  when 'pico2'
+    "#{ENV['WITH_KEYMAP_DIR']}build_pico2"
+  else
+    "#{ENV['WITH_KEYMAP_DIR']}build_pico"
+  end
+  FileUtils.mkdir_p dir
+  dir
+end
+
+task :default do
+  puts "Specify a task:"
+  puts "  rake pico       # build for RP2040"
+  puts "  rake pico2      # build for RP2350"
+end
 
 task :setup do
   sh "bundle install"
-  sh "git submodule update --init"
+  sh "git submodule update --init --recursive"
   FileUtils.cd "lib/picoruby" do
     sh "bundle install"
   end
 end
 
-task :all => [:libmruby, :test, :cmake, :build]
+task :all => [:libmruby, :cmake, :build]
 
-
-desc "build debug (you may need to rake clean before this)"
-task :debug do
+desc "build debug for RP2040 (you may need to rake clean before this)"
+task :pico_debug do
   ENV['PICORUBY_DEBUG'] = '1'
-  ENV['-DCMAKE_BUILD_TYPE'] = 'Debug'
+  ENV['BOARD'] = 'pico'
+  ENV['CMAKE_BUILD_TYPE'] = 'Debug'
   Rake::Task[:all].invoke
 end
 
-desc "build production"
-task :production do
+desc "build production for RP2040"
+task :pico do
+  ENV['BOARD'] = 'pico'
+  ENV['CMAKE_BUILD_TYPE'] = 'Release'
   Rake::Task[:all].invoke
 end
 
-desc "build PRK Firmware inclusive of keymap.rb (without mass storage)"
-task :build_with_keymap, ['keyboard_name'] do |_t, args|
+desc "build debug for RP2350 (you may need to rake clean before this)"
+task :pico2_debug do
+  ENV['PICORUBY_DEBUG'] = '1'
+  ENV['BOARD'] = 'pico2'
+  ENV['CMAKE_BUILD_TYPE'] = 'Debug'
+  Rake::Task[:all].invoke
+end
+
+desc "build production for RP2350"
+task :pico2 do
+  ENV['BOARD'] = 'pico2'
+  ENV['CMAKE_BUILD_TYPE'] = 'Release'
+  Rake::Task[:all].invoke
+end
+
+def with_keymap(board)
+  ENV['BOARD'] = board
+  ENV['PICORUBY_NO_MSC'] = '1'
+  ENV['WITH_KEYMAP_DIR'] = "keyboards/#{args.keyboard_name}/"
+  Rake::Task[:all].invoke
+end
+
+desc "build PRK Firmware inclusive of keymap.rb (without mass storage) for RP2040"
+task :build_with_keymap_pico, ['keyboard_name'] do |_t, args|
   unless args.keyboard_name
     raise "Argument `keyboard_name` missing.\nUsage: rake build_with_keymap[prk_meishi2]"
   end
-  dir = "keyboards/#{args.keyboard_name}"
-  FileUtils.mkdir_p "#{dir}/build"
-  ENV['PICORUBY_NO_MSC'] = '1'
-  ENV['PRK_BUILD_DIR'] = "#{dir}/"
-  Rake::Task[:all].invoke
+  with_keymap('pico')
 end
 
-desc "build production with SQLite3 and SD card"
+desc "build PRK Firmware inclusive of keymap.rb (without mass storage) for RP2350 (Pico2)"
+task :build_with_keymap_pico2, ['keyboard_name'] do |_t, args|
+  unless args.keyboard_name
+    raise "Argument `keyboard_name` missing.\nUsage: rake build_with_keymap[prk_meishi2]"
+  end
+  with_keymap('pico2')
+end
+
+desc "build production with SQLite3 and SD card for RP2350 (Pico2)"
 task :sqlite3 do
   ENV['PICORUBY_SQLITE3'] = '1'
   ENV['PICORUBY_SD_CARD'] = '1'
   ENV['PICORUBY_MSC_SD'] = '1'
+  ENV['BOARD'] = 'pico2'
   Rake::Task[:all].invoke
 end
 
@@ -54,13 +124,13 @@ end
 
 task :libmruby => "lib/picoruby" do
   FileUtils.cd "lib/picoruby" do
-    sh "MRUBY_CONFIG=default rake test"
-    sh "MRUBY_CONFIG=#{ENV['MRUBY_CONFIG']} rake"
+    sh "rake test"
+    sh "MRUBY_CONFIG=#{mruby_config} rake"
   end
 end
 
 task :cmake do
-  sh "cmake -B #{ENV['PRK_BUILD_DIR']}build"
+  sh "#{cmake_flags} cmake #{def_board} -DCMAKE_BUILD_TYPE=#{ENV['CMAKE_BUILD_TYPE']} -B #{build_dir}"
 end
 
 task :check_pico_sdk => :check_pico_sdk_path do
@@ -85,37 +155,7 @@ end
 
 desc "build without cmake preparation"
 task :build => :check_pico_sdk do
-  sh "cmake --build #{ENV['PRK_BUILD_DIR']}build"
-end
-
-desc "clean built that includes keymap"
-task :clean_with_keymap , ['keyboard_name'] do |_t, args|
-  unless args.keyboard_name
-    raise "Argument `keyboard_name` missing.\nUsage: rake clean_with_keymap[prk_meishi2]"
-  end
-  FileUtils.rm_r Dir.glob("keyboards/#{args.keyboard_name}/build/*")
-end
-
-
-desc "run :mrubyc_test"
-task :test => %i(mrubyc_test)
-
-desc "run unit test for ruby program"
-task :mrubyc_test => :setup_test do
-  sh %q(MRUBYCFILE=test/Mrubycfile bundle exec mrubyc-test)
-end
-
-task :setup_test do
-  FileUtils.cd "test/models" do
-    Dir.glob("../../lib/picoruby/mrbgems/picoruby-prk-*").each do |dir|
-      Dir.glob("#{dir}/mrblib/*.rb").each do |model|
-        FileUtils.ln_sf model, File.basename(model)
-      end
-    end
-    FileUtils.ln_sf "../../lib/picoruby/mrbgems/picoruby-gpio/mrblib/gpio.rb", "gpio.rb"
-    FileUtils.ln_sf "../../lib/picoruby/mrbgems/picoruby-float-ext/mrblib/float.rb", "float.rb"
-    FileUtils.ln_sf "../../lib/picoruby/mrbgems/picoruby-music-macro-language/mrblib/mml.rb", "mml.rb"
-  end
+  sh "cmake --build #{build_dir}"
 end
 
 desc "clean built"
@@ -123,13 +163,15 @@ task :clean do
   FileUtils.cd "lib/picoruby" do
     sh "rake clean"
   end
-  FileUtils.cd "build" do
-    FileUtils.rm_rf Dir.glob("prk_firmware-*.*")
-  end
-  begin
-    sh "cmake --build build --target clean"
-  rescue => e
-    puts "Ignoring an error: #{e.message}"
+  %w(build_pico build_pico2).each do |dir|
+    FileUtils.cd dir do
+      FileUtils.rm_rf Dir.glob("prk_firmware-*.*")
+    end
+    begin
+      sh "cmake --build #{dir} --target clean"
+    rescue => e
+      puts "Ignoring an error: #{e.message}"
+    end
   end
 end
 
@@ -138,8 +180,10 @@ task :deep_clean do
   FileUtils.cd "lib/picoruby" do
     sh "rake deep_clean"
   end
-  FileUtils.cd "build" do
-    FileUtils.rm_rf Dir.glob("*")
+  %(build_pico build_pico2).each do |dir|
+    FileUtils.cd dir do
+      FileUtils.rm_rf Dir.glob("*")
+    end
   end
 end
 
@@ -150,13 +194,8 @@ task :symlinks do
   end
 end
 
-desc "run guard-process"
-task :guard do
-  sh "bundle exec guard start -i"
-end
-
 # Add a new tag then push it
-task :release => :test do
+task :release do
   git_status = `git status`
   branch = git_status.split("\n")[0].match(/\AOn branch (.+)\z/)[1]
   if branch != "master"

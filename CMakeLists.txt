@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 # initialize the SDK based on PICO_SDK_PATH
 # note: this must happen before project()
 include(pico_sdk_import.cmake)
+include(pico_extras_import.cmake)
 
 #####################################################
 # project specific configuration from here
@@ -15,7 +16,6 @@ add_definitions(
   -DMRBC_CONVERT_CRLF
   -DMRBC_USE_MATH
   -DMRBC_USE_FLOAT=2
-  -DPICORBC_PTR_SIZE=4
   -DNO_CLOCK_GETTIME=1
 )
 
@@ -43,10 +43,38 @@ if(DEFINED ENV{PICORUBY_SQLITE3})
   add_definitions(-DPICORUBY_SQLITE3)
 endif()
 
-project("prk_firmware-${MSC_NAME}-${PRK_VERSION}-${PRK_BUILDDATE}-${PRK_REVISION}")
+if(DEFINED ENV{PICO2})
+  set(PICO_BOARD pico2)
+  set(R2P2_NAME R2P2_PICO2)
+  set(BUILD_CONFIG prk_firmware-cortex-m33)
+  set(BUILD_DIR build_pico2)
+  add_compile_options(
+    -mcpu=cortex-m33
+    #-march=armv8-m.main+fp+dsp
+    #-mabi=aapcs-linux
+    #-mfloat-abi=softfp
+    -fno-strict-aliasing
+    -fno-unroll-loops
+    -mslow-flash-data
+  )
+else()
+  set(R2P2_NAME R2P2)
+  set(BUILD_CONFIG prk_firmware-cortex-m0plus)
+  set(BUILD_DIR build_pico)
+endif()
+
+project("prk_firmware-${PICO_BOARD}-${MSC_NAME}-${PRK_VERSION}-${PRK_BUILDDATE}-${PRK_REVISION}")
 
 # Initializing the Raspberry Pi Pico SDK should happen after project created
 pico_sdk_init()
+
+add_compile_options(-Wall
+  # int != int32_t as far as the compiler is concerned because gcc has int32_t as long int
+  -Wno-format
+  -Wno-unused-function
+  -Wno-maybe-uninitialized
+  -fshort-enums
+)
 
 file(GLOB SRCS src/*.c)
 add_executable(${PROJECT_NAME}
@@ -58,7 +86,13 @@ add_executable(${PROJECT_NAME}
   ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-i2c/ports/rp2040/i2c.c
   ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-spi/ports/rp2040/spi.c
   ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-adc/ports/rp2040/adc.c
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-uart/ports/rp2040/uart.c
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-pwm/ports/rp2040/pwm.c
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-machine/ports/rp2040/machine.c
   ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-io-console/ports/rp2040/io-console.c
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-watchdog/ports/rp2040/watchdog.c
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-rng/ports/rp2040/rng.c
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-env/ports/rp2040/env.c
 )
 
 set(PICORBC ${CMAKE_SOURCE_DIR}/lib/picoruby/bin/picorbc)
@@ -85,7 +119,7 @@ if(DEFINED ENV{PICORUBY_NO_MSC})
 endif()
 
 add_custom_target(mrbdir ALL
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/build/mrb
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/${BUILD_DIR}/mrb
 )
 
 set(RUBY_TASK_FILES
@@ -94,54 +128,54 @@ set(RUBY_TASK_FILES
 foreach(rb ${RUBY_TASK_FILES})
   add_custom_target(${rb}
     COMMAND ${PICORBC} -B${rb}
-      -o${CMAKE_SOURCE_DIR}/build/mrb/${rb}.c
+      -o${CMAKE_SOURCE_DIR}/${BUILD_DIR}/mrb/${rb}.c
       ${CMAKE_SOURCE_DIR}/mrblib/${rb}.rb
   )
 endforeach(rb)
 
-add_custom_target(object-ext
-  COMMAND ${PICORBC} -Bobject_ext
-    -o${CMAKE_SOURCE_DIR}/build/mrb/object-ext.c
-    ${CMAKE_SOURCE_DIR}/mrblib/object-ext.rb
-)
-
 add_dependencies(${PROJECT_NAME}
-  object-ext
   mrbdir
   ${RUBY_TASK_FILES}
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
   ${CMAKE_SOURCE_DIR}/tinyusb
-  ${CMAKE_SOURCE_DIR}/lib/picoruby/include/hal_no_impl
-  ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-mrubyc/repos/mrubyc/src
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-machine/include
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-mrubyc/lib/mrubyc/src
   ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems/picoruby-filesystem-fat/lib/ff14b/source
-  ${CMAKE_SOURCE_DIR}/lib/picoruby/build/$ENV{MRUBY_CONFIG}/mrbgems
-  ${CMAKE_SOURCE_DIR}/lib/picoruby/build/repos/$ENV{MRUBY_CONFIG}/mruby-pico-compiler/include
   ${CMAKE_SOURCE_DIR}/lib/picoruby/mrbgems
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/build/${BUILD_CONFIG}/mrbgems
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/build/repos/${BUILD_CONFIG}/mruby-compiler2/include
+  ${CMAKE_SOURCE_DIR}/${BUILD_DIR}/mrb
 )
 
 target_link_directories(${PROJECT_NAME} PRIVATE
-  ${CMAKE_SOURCE_DIR}/lib/picoruby/build/$ENV{MRUBY_CONFIG}/lib
+  ${CMAKE_SOURCE_DIR}/lib/picoruby/build/${BUILD_CONFIG}/lib
 )
 
-target_link_libraries(${PROJECT_NAME}
+target_link_libraries(${PROJECT_NAME} PRIVATE
   pico_stdlib
   pico_bootsel_via_double_reset
   tinyusb_device
   tinyusb_board
   hardware_pio
-  hardware_pwm
-  pico_multicore
   hardware_flash
   hardware_adc
+  hardware_uart
   hardware_dma
   hardware_sync
   hardware_irq
   hardware_i2c
   hardware_spi
+  hardware_pwm
   mruby
 )
+# Workaround for Pico2
+if(NOT DEFINED ENV{PICO2})
+  target_link_libraries(${PROJECT_NAME} PRIVATE
+    hardware_sleep
+  )
+endif()
 
 # create map/bin/hex/uf2 file in addition to ELF.
 pico_add_extra_outputs(${PROJECT_NAME})

@@ -1,5 +1,4 @@
 /* PicoRuby */
-#include <picorbc.h>
 #include <picogem_init.c>
 
 /* Raspi SDK */
@@ -21,26 +20,32 @@
 #include "../include/joystick.h"
 #include "../include/sounder.h"
 
-/* ruby */
-/* ext */
-#include "../build/mrb/object-ext.c"
 /* tasks */
-#include "../build/mrb/usb_task.c"
+#include "usb_task.c"
 
 #ifdef PICORUBY_NO_MSC
 #include <keymap.c>
 #endif
 
-#if defined(PICORUBY_SQLITE3)
-  #define MEMORY_SIZE (1024*203)
-#else
-  #define MEMORY_SIZE (1024*207)
+
+#if !defined(HEAP_SIZE)
+  #if defined(PICO_RP2040)
+    #if defined(PICORUBY_SQLITE3)
+      #error "Not enough memory for SQLite3 in RP2040"
+    #endif
+    #define HEAP_SIZE (1024 * 194)
+  #elif defined(PICO_RP2350)
+    #if defined(PICORUBY_SQLITE3)
+      #define HEAP_SIZE (1024 * (194 + 240))
+    #else
+      #define HEAP_SIZE (1024 * (194 + 260))
+    #endif
+  #else
+    #error "Unknown board"
+  #endif
 #endif
 
-static uint8_t memory_pool[MEMORY_SIZE];
-
-/* extern in mruby-pico-compiler/include/debug.h */
-int loglevel = LOGLEVEL_WARN;
+static uint8_t memory_pool[HEAP_SIZE];
 
 int autoreload_state; /* from keyboard.h */
 
@@ -64,9 +69,7 @@ prk_init_picoruby(void)
 {
   mrbc_vm *vm = mrbc_vm_open(NULL);
   /* CONST */
-  mrbc_sym sym_id = mrbc_str_to_symid("SIZEOF_POINTER");
-  mrbc_set_const(sym_id, &mrbc_integer_value(PICORBC_PTR_SIZE));
-  sym_id = mrbc_str_to_symid("PICORUBY_MSC");
+  mrbc_sym sym_id = mrbc_str_to_symid("PICORUBY_MSC");
   mrbc_value picoruby_msc = mrbc_string_new_cstr(vm,
 #if defined(PICORUBY_NO_MSC)
     "NO_MSC"
@@ -80,12 +83,8 @@ prk_init_picoruby(void)
   sym_id = mrbc_str_to_symid("PRK_DESCRIPTION");
   mrbc_value prk_desc = mrbc_string_new_cstr(vm, PRK_DESCRIPTION);
   mrbc_set_const(sym_id, &prk_desc);
-  mrbc_raw_free(vm);
-  /* class Object */
-  picoruby_load_model(object_ext);
-  picoruby_init_require();
+  picoruby_init_require(vm);
   prk_init_Machine();
-  prk_init_PicoRubyVM();
   prk_init_USB();
 }
 
@@ -96,10 +95,8 @@ main(void)
   stdio_init_all();
   board_init();
   /* PicoRuby */
-  mrbc_init(memory_pool, MEMORY_SIZE);
+  mrbc_init(memory_pool, HEAP_SIZE);
   prk_init_picoruby();
-  /* TinyUSB */
-  tusb_init();
   /* Tasks */
   mrbc_create_task(usb_task, 0);
 #ifdef PICORUBY_NO_MSC
